@@ -60,7 +60,6 @@ typedef struct state_t{
 	int next_expected_seq_num;
 	int ack_num;
 	int curr_ack_num;
-	int data_len;
 
 	gbnhdr segment;
 

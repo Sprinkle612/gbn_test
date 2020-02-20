@@ -6,13 +6,13 @@ void alarm_handler(int sig){
 	if (state.timeout_times > 5){
 		gbn_close(state.sockfd);
 	}
-	signal(SIGALRM, SIG_IGN); /* ignore same signal interrupting. */
+	signal(SIGALRM, SIG_IGN);
 
 	if (state.segment.type == SYN){
 		printf("[alarm_handler]:re-send SYN...\n");
 		int retval = (int)maybe_sendto(state.sockfd, &state.segment, sizeof(state.segment),0,state.addr,state.addrlen);
 		if (retval < 0){
-			perror("error in maybe_sendto() at gbn_connect()");
+			perror("ERROR: in maybe_sendto() at gbn_connect()");
 			exit(-1);
 		}
 	}
@@ -21,7 +21,7 @@ void alarm_handler(int sig){
 		printf("[alarm_handler]:re-send FIN...\n");
 		int retval = (int)maybe_sendto(state.sockfd, &state.segment, sizeof(state.segment),0,state.addr,state.addrlen);
 		if (retval){
-			perror("error in maybe_sendto() at gbn_connect()");
+			perror("ERROR: in maybe_sendto() at gbn_connect()");
 			exit(-1);
 		}
 	}
@@ -30,7 +30,7 @@ void alarm_handler(int sig){
         printf("[alarm_handler]: re-send DATA segment. seq_num = %d, ack_num = %d, body_len = %d.\n", state.segment.seqnum,
                state.segment.acknum, state.segment.body_len);
         if (maybe_sendto(state.sockfd, &state.segment, sizeof(state.segment), 0, state.addr, state.addrlen) < 0) {
-            perror("error in sendto() at gbn_close()");
+            perror("ERROR: in sendto() at gbn_close()");
             exit(-1);
         }
         state.mode = 0; /* change to slow mode. */
@@ -66,7 +66,7 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
 	int next_seq_num = state.next_expected_seq_num;
 	int buf_ptr = 0, segment_ptr = 0;
 	int attempts = 0;
-	gbnhdr window_buffer[8];
+	gbnhdr window_buffer[4];
 
 	while(buf_ptr < len){
 		int window_size = 1 << state.mode;
@@ -115,8 +115,6 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
 		attempts ++;
 		gbnhdr received_data;
 		int window_buffer_ptr = 0;
-
-		int next_expected_ack_num = window_buffer[window_buffer_ptr].seqnum + window_buffer[window_buffer_ptr].body_len;
 		int curr_window_size = 1 << state.mode ;
 
 		while (1){
@@ -125,7 +123,7 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
 			ssize_t retval = maybe_recvfrom(sockfd, (char *) & received_data, sizeof(received_data),0,from_addr,&from_len);
 
 			if (retval < 0){
-				perror("error in recvfrom() at gbn_send()");
+				perror("ERROR in recvfrom() at gbn_send()");
 				if (errno != EINTR){
 					printf("ERROR: Error when receive ACK.\n");
 					exit(-1);
@@ -148,7 +146,7 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
 					state.timeout_times = 0;
 					alarm(TIMEOUT);
 					state.curr_ack_num = received_data.seqnum + state.segment.body_len;
-					int old_window_buf_ptr = window_buffer_ptr;
+					/*int old_window_buf_ptr = window_buffer_ptr;*/
 
 					window_buffer_ptr ++;
 					if (window_buffer_ptr < window_size){
@@ -213,7 +211,6 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
 							printf("[gbn_send]: ENTERING THE WHILE LOOP: state.segment.segnum: %d, received_data.seqnum: %d, window_buf_ptr: %d,state.curr_ack_num:%d\n",state.segment.seqnum,received_data.seqnum,window_buffer_ptr,state.curr_ack_num);
 						}
 					}
-					/*state.curr_ack_num = received_data.seqnum + state.segment.body_len;*/
 					state.curr_ack_num = received_data.seqnum + state.segment.body_len;
 
 					window_buffer_ptr ++;
@@ -242,8 +239,8 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
 
 ssize_t gbn_recv(int sockfd, void *buf, size_t len, int flags){
 
-	/* TODO: Your code here. */
-while (1) {
+	/* successfully return until maybe_recvfrom return valid received_data*/
+	while (1) {
 
         /* clear all old buf content. */
         int k;
@@ -266,8 +263,9 @@ while (1) {
             synack.seqnum = 1;
             synack.checksum = 0;
             maybe_sendto(sockfd, &synack, sizeof(synack), 0, state.addr, state.addrlen);
-            printf("[gbn_recv]: reply SYNACK..\n");
-            continue;
+            printf("[gbn_recv]: reply SYNACK.\n");
+			state.status = ESTABLISHED;
+			return(1);
         }
         if (received_data.type == FIN) { /* reply FINACK. */
             printf("[gbn_recv]: receive FIN..\n");
@@ -278,7 +276,7 @@ while (1) {
             maybe_sendto(sockfd, &finack, sizeof(finack), 0, state.addr, state.addrlen);
             printf("[gbn_recv]: reply FINACK..\n");
             state.status = FIN_RCVD;
-            return 0;
+            return(0);
         }
         if (received_data.type == DATA) { /* reply DATAACK. */
             printf("[gbn_recv]: received one DATA segment. seq_num = %d, body_len = %d.\n", received_data.seqnum,
@@ -287,14 +285,14 @@ while (1) {
             /* check whether the data is corrupted */
             bool passed_checksum = true;
             if (received_data.checksum != checksum(received_data.data, received_data.body_len)) {
-                printf("[gbn_recv]: The data is corrupted. Checksum should be %d, but it is actually %d\n",
+                printf("[gbn_recv]: The data is corrupted. Checksum should be %d, but it is %d\n",
                        received_data.checksum, checksum(received_data.data, received_data.body_len));
                 passed_checksum = false;
             } else {
                 printf("[gbn_recv]: Data integrity checked.\n");
             }
 
-            if ((state.curr_ack_num == 1 || state.curr_ack_num == received_data.seqnum) && passed_checksum) {
+            if ( state.curr_ack_num == received_data.seqnum && passed_checksum) {
                 /* send correct ack. */
                 gbnhdr dataack;
                 dataack.type = DATAACK;
@@ -337,60 +335,44 @@ int gbn_close(int sockfd){
 
 	/* TODO: Your code here. */
 	if (state.status == FIN_RCVD){
-		printf("[gbn_close]:connection alredy closed.exit.\n");
-		return 0;
+		printf("[gbn_close from client]:connection is closed.\n");
+		return (close(sockfd));
 	}
-	int attempts = 0;
-
-	while (1){
-		gbnhdr fin_segment;
-		fin_segment.type = FIN;
-		int retval = (int) maybe_sendto(sockfd,&fin_segment,sizeof(fin_segment),0,state.addr,state.addrlen);
-		if (retval < 0){
-			perror("error in maybe_sendto() at close()");
-			exit(-1);
-		}
-
-		state.status = FIN_SENT;
-		state.segment = fin_segment;
-		printf("[gbn_close]: send FIN. \n");
-		alarm(TIMEOUT);
-
-		struct sockaddr *from_addr = NULL;
-		socklen_t from_len = sizeof(from_addr);
-		gbnhdr buf;
-
-		while(1){
-			printf("[gbn_close]:start listening...\n");
-			ssize_t retval_rec = maybe_recvfrom(sockfd,(char *) &buf, sizeof(buf),0,from_addr,&from_len);
-
-			if (retval_rec < 0){
-				perror("error in recvfrom at gbnclose()");
-				exit(-1);
-			}
-
-			if (buf.type == FINACK){
-				printf("[gbn_close]:received FINACK...\n");
-				alarm(0);
-				state.status = FIN_RCVD;
-				return (close(sockfd));
-			}
-
-			if(buf.type == FIN){
-				printf("[gbn_close]:receive FIN...\n");
-				alarm(0);
-				gbnhdr finack_segment;
-				finack_segment.type = FINACK;
-				fin_segment.seqnum = (uint8_t) state.seq_num;
-				fin_segment.acknum = (uint8_t) state.ack_num;
-
-				maybe_sendto(sockfd, &fin_segment,sizeof(fin_segment),0,state.addr,state.addrlen);
-				printf("successfully received FIN. FINACK replied and connection closed.\n");
-				state.status = FIN_RCVD;
-				return (close(sockfd));
-			}
-		}
+	/*while(1) {*/
+	gbnhdr fin_segment;
+	fin_segment.type = FIN;
+	int retval = (int) maybe_sendto(sockfd,&fin_segment,sizeof(fin_segment),0,state.addr,state.addrlen);
+	if (retval < 0){
+		perror("ERROR: in maybe_sendto() at close()");
+		exit(-1);
 	}
+
+	state.status = FIN_SENT;
+	state.segment = fin_segment;
+	printf("[gbn_close from server]: send FIN. \n");
+	alarm(TIMEOUT);
+
+	struct sockaddr *from_addr = NULL;
+	socklen_t from_len = sizeof(from_addr);
+	gbnhdr buf;
+
+	printf("[gbn_close from server]:start listening...\n");
+	ssize_t retval_rec = maybe_recvfrom(sockfd,(char *) &buf, sizeof(buf),0,from_addr,&from_len);
+
+	if (retval_rec < 0){
+		perror("ERROR in recvfrom at gbnclose()");
+		exit(-1);
+	}
+
+	if (buf.type == FINACK){
+		printf("[gbn_close from server]:received FINACK.\n");
+		alarm(0);
+		state.status = CLOSED;
+		return (close(sockfd));
+	}
+	printf("[gbn_close]: CONNECTION BRUTALLY CLOSED");
+	return (close(sockfd));
+	/*}*/
 }
 
 int gbn_connect(int sockfd, const struct sockaddr *server, socklen_t socklen){
@@ -399,49 +381,44 @@ int gbn_connect(int sockfd, const struct sockaddr *server, socklen_t socklen){
 	state.sockfd = sockfd;
 	state.seq_num = 0;
 	state.ack_num = -1;
-	state.data_len = 0;
 	state.mode = 0;
 	state.curr_ack_num = 1;
 	state.next_expected_seq_num = 1;
 	state.timeout_times = 0;
 
 	signal(SIGALRM,alarm_handler);
+	while (1) {
+	gbnhdr syn_segment;
+	syn_segment.type = SYN;
+	syn_segment.seqnum = (uint32_t) state.seq_num;
+	syn_segment.acknum = (uint32_t) state.ack_num;
 
-	while (1){
-		gbnhdr syn_segment;
-		syn_segment.type = SYN;
-		syn_segment.seqnum = (uint32_t) state.seq_num;
-		syn_segment.acknum = (uint32_t) state.ack_num;
+	int retval = (int) maybe_sendto(sockfd,&syn_segment,sizeof(syn_segment),0,server,socklen);
+	if (retval < 0){
+		perror("ERROR: in maybe_sendto() at gbn_connect");
+		exit(-1);
+	}
+	state.segment = syn_segment;
+	alarm(TIMEOUT);
 
-		int retval = (int) maybe_sendto(sockfd,&syn_segment,sizeof(syn_segment),0,server,socklen);
-		if (retval < 0){
-			perror("error in maybe_sendto() at gbn_connect");
-			exit(-1);
-		}
-		state.segment = syn_segment;
-		alarm(TIMEOUT);
+	state.addr = (struct sockaddr *) server; 
+	state.addrlen = socklen;
 
-		state.addr = (struct sockaddr *) server; 
-		state.addrlen = socklen;
+	printf("[gbn_connect from SERVER]:send SYN. \n");
 
-		printf("[gbn_connect]:send SYN. \n");
-
-		gbnhdr buf;
-
-		while (1){
-			struct sockaddr *from_addr = NULL;
-			socklen_t from_len = sizeof(from_addr);
-			ssize_t retval2 = maybe_recvfrom(sockfd, (char *) &buf, sizeof(buf),0,from_addr,&from_len);
-			if (retval2 < 0){
-				perror("error in recvfrom() at gbn_connect()");
-				exit(-1);
-			}
-			if(buf.type == SYNACK){
-				alarm(0);
-				printf("[gbn_connect]: received SYNACK. \n");
-				return (0);
-			}
-		}
+	gbnhdr buf;
+	struct sockaddr *from_addr = NULL;
+	socklen_t from_len = sizeof(from_addr);
+	ssize_t retval2 = maybe_recvfrom(sockfd, (char *) &buf, sizeof(buf),0,from_addr,&from_len);
+	if (retval2 < 0){
+		perror("ERROR in recvfrom() at gbn_connect()");
+		exit(-1);
+	}
+	if(buf.type == SYNACK){
+		alarm(0);
+		printf("[gbn_connect from server]: received SYNACK. \n");
+		return (0);
+	}
 	}
 }
 
@@ -478,7 +455,7 @@ int gbn_accept(int sockfd, struct sockaddr *client, socklen_t *socklen){
 		ssize_t retval = maybe_recvfrom(sockfd,(char *) &buf, sizeof(buf),0,client,socklen );
 
 		if (retval < 0){
-			perror("error in maybe_recvfrom() at gbn_accept().");
+			perror("ERROR in maybe_recvfrom() at gbn_accept().");
 			exit(-1);
 		}
 
@@ -495,7 +472,7 @@ int gbn_accept(int sockfd, struct sockaddr *client, socklen_t *socklen){
 			}
 			state.addr = client;
 			state.addrlen = *socklen; /*--?--*/
-			printf("[gbn_accept]:server successfully receive SYN and reply with SYNACK. Move to state.\n");
+			printf("[gbn_accept from CLIENT]:server successfully receive SYN and reply with SYNACK. Move to state.\n");
 			break;
 		}
 	}
